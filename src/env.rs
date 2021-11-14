@@ -1,11 +1,48 @@
-use std::env;
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 use crate::error::*;
 use crate::map::Map;
 use crate::source::Source;
 use crate::value::{Value, ValueKind};
 
+/// Describes a source of environment variables.
+pub trait EnvironmentSource: Debug + Sync + Send {
+    fn vars(&self) -> Box<dyn Iterator<Item = (String, String)>>;
+}
+
+#[derive(Clone, Copy, Debug)]
+/// The default implementation of [`EnvironmentSource`], extracting from the OS Environment.
+pub struct OsSource;
+
+impl EnvironmentSource for OsSource {
+    fn vars(&self) -> Box<dyn Iterator<Item = (String, String)>> {
+        Box::new(std::env::vars())
+    }
+}
+
+impl EnvironmentSource for HashMap<String, String> {
+    fn vars(&self) -> Box<dyn Iterator<Item = (String, String)>> {
+        Box::new(self.clone().into_iter())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct EnvSource {
+    inner: Arc<dyn EnvironmentSource>,
+}
+
+impl Default for EnvSource {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(OsSource),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
+/// A [`Source`] that extracts configuration values from the environment.
 pub struct Environment {
     /// Optional prefix that will limit access to the environment to only keys that
     /// begin with the defined prefix.
@@ -26,6 +63,11 @@ pub struct Environment {
 
     /// Parses booleans, integers and floats if they're detected (can be safely parsed).
     try_parsing: bool,
+
+    /// Location to extract the source from.
+    /// Defaults to [`OsSource`], but also supports [`HashMap`] and potentially
+    /// other implemented types.
+    source: EnvSource,
 }
 
 impl Environment {
@@ -62,6 +104,27 @@ impl Environment {
         self.try_parsing = try_parsing;
         self
     }
+
+    /// Set the source of the `Environment` for testing purposes. Defaults to [`OsSource`].
+    ///
+    /// ```rust
+    /// # use std::collections::HashMap;
+    /// use config::{Config, Environment};
+    ///
+    /// let envs: HashMap<String, String> = vec![
+    ///     ("CONFIG_TEST".to_owned(), "foo".to_owned()),
+    ///     ("IGNORE".to_owned(), "bar".to_owned())
+    /// ].into_iter().collect();
+    ///
+    /// let cfg = Config::builder()
+    ///     .add_source(Environment::default().prefix("CONFIG").source(envs))
+    ///     .build().unwrap();
+    /// assert_eq!(cfg.get_string("test").unwrap(), "foo");
+    /// ```
+    pub fn source(mut self, source: impl EnvironmentSource + 'static) -> Self {
+        self.source.inner = Arc::new(source);
+        self
+    }
 }
 
 impl Source for Environment {
@@ -82,7 +145,7 @@ impl Source for Environment {
             .as_ref()
             .map(|prefix| format!("{}{}", prefix, group_separator).to_lowercase());
 
-        for (key, value) in env::vars() {
+        for (key, value) in self.source.inner.vars() {
             // Treat empty environment variables as unset
             if self.ignore_empty && value.is_empty() {
                 continue;
