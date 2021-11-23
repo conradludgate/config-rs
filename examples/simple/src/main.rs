@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
 fn main() {
-    let mut settings = config::Config::default();
-    settings
+    let settings = config::Config::builder()
         // Add in `./Settings.toml`
-        .merge(config::File::with_name("Settings")).unwrap()
+        .add_source(config::File::with_name("Settings"))
         // Add in settings from the environment (with a prefix of APP)
         // Eg.. `APP_DEBUG=1 ./target/app` would set the `debug` key
-        .merge(config::Environment::with_prefix("APP")).unwrap();
+        .add_source(config::Environment::with_prefix("APP"))
+        .build()
+        .unwrap();
 
     // Print out our settings (as a HashMap)
     println!("{:?}",
